@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+.env
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Model checkpoints (will be regenerated/mounted as volumes)
+checkpoint_*.pt
+final_model.pt
+*.pt
+
+# Data/cache (large, will be mounted as volumes)
+wiki_corpus.jsonl
+*.jsonl
+
+# Ray tune artifacts
+ray_results/
+~/ray_results
+
+# Logs
+*.log
+logs/
+
+# Temporary
+*.tmp
+tmp/
+temp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+LICENSE
+
+# GitHub actions
+.github/
+
+# Project specific
+.venv/
+node_modules/

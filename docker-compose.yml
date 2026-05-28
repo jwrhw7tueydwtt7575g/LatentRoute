@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  latentroute-train:
+    image: latentroute:latest
+    container_name: latentroute-train
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    # GPU support
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    
+    # Load environment variables
+    env_file:
+      - .env.docker
+    
+    # Volume mounts
+    volumes:
+      # Model checkpoints and final model
+      - ./models:/models
+      - /workspace/models:/models
+      
+      # Training data (wiki_corpus.jsonl, tokenizer vocab)
+      - ./data:/data
+      - /workspace/data:/data
+      
+      # Cache directories (large - HF datasets, torch)
+      - cache-huggingface:/cache/huggingface
+      - cache-torch:/cache/torch
+      
+      # Logs
+      - ./logs:/workspace/logs
+      - /workspace/logs:/workspace/logs
+      
+      # Optional: Ray tune results
+      - ray-results:/workspace/ray_results
+    
+    # Expose Ray Tune dashboard (if using distributed training)
+    ports:
+      - "8265:8265"  # Ray Tune dashboard
+      - "8888:8888"  # Jupyter (optional)
+    
+    # Resource limits (adjust based on your hardware)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1          # Number of GPUs to allocate
+              capabilities: [gpu]
+        limits:
+          memory: 120G          # Max memory allocation
+    
+    # Keep container running
+    stdin_open: true
+    tty: true
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Override entrypoint for interactive shell if needed
+    # command: /bin/bash
+
+  # Optional: Separate data preparation service (CPU only)
+  latentroute-prepare:
+    image: latentroute:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    container_name: latentroute-prepare
+    
+    env_file:
+      - .env.docker
+    
+    volumes:
+      - ./data:/data
+      - /workspace/data:/data
+      - cache-huggingface:/cache/huggingface
+    
+    # No GPU needed for data preparation
+    command: /bin/bash
+    
+    stdin_open: true
+    tty: true
+    
+    profiles:
+      - data-prep
+
+# Named volumes for persistent storage across container restarts
+volumes:
+  cache-huggingface:
+    driver: local
+  cache-torch:
+    driver: local
+  ray-results:
+    driver: local
+
+networks:
+  default:
+    name: latentroute-network
+    driver: bridge

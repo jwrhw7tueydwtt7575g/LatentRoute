@@ -1,8 +1,9 @@
 from __future__ import annotations
-
+import os
+import json
 import math
 from dataclasses import dataclass
-from typing import Optional, Sequence, Union
+from typing import Any, Optional, Sequence, Union
 
 import torch
 import torch.nn as nn
@@ -155,9 +156,11 @@ class KVCache:
             self.key = key
             self.value = value
         else:
+            assert self.key is not None and self.value is not None
             self.key = torch.cat([self.key, key], dim=2)
             self.value = torch.cat([self.value, value], dim=2)
-        self.seq_len = int(self.key.shape[2])
+        assert self.key is not None
+        self.seq_len = self.key.shape[2]
         return self
 
     def get(self) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
@@ -191,8 +194,10 @@ class LatentKVCache:
         if self.is_empty():
             self.c_kv = c_kv
         else:
+            assert self.c_kv is not None
             self.c_kv = torch.cat([self.c_kv, c_kv], dim=1)
-        self.seq_len = int(self.c_kv.shape[1])
+        assert self.c_kv is not None
+        self.seq_len = self.c_kv.shape[1]
         return self
 
     def get(self) -> Optional[torch.Tensor]:
@@ -318,18 +323,24 @@ class MultiHeadAttention(nn.Module):
             return x
 
         seq_len = x.size(-2)
-        if isinstance(self.rope, RoPEEmbedding):
-            freqs_cos = self.rope.freqs_cos[position_offset : position_offset + seq_len].to(device=x.device, dtype=x.dtype)
-            freqs_sin = self.rope.freqs_sin[position_offset : position_offset + seq_len].to(device=x.device, dtype=x.dtype)
-        elif isinstance(self.rope, ARFSRoPEEmbedding):
-            domain_tensor = torch.tensor(domain_id, device=self.rope.gamma.device, dtype=torch.long)
-            domain_embed = self.rope.domain_embed(domain_tensor)
-            scaling = torch.exp(self.rope.gamma * domain_embed)
-            freqs_cos = (self.rope.freqs_cos_base[position_offset : position_offset + seq_len] * scaling.unsqueeze(0)).to(
+        rope = self.rope
+        if isinstance(rope, RoPEEmbedding):
+            cos_buf: torch.Tensor = rope.freqs_cos  # type: ignore[assignment]
+            sin_buf: torch.Tensor = rope.freqs_sin  # type: ignore[assignment]
+            freqs_cos = cos_buf[position_offset : position_offset + seq_len].to(device=x.device, dtype=x.dtype)
+            freqs_sin = sin_buf[position_offset : position_offset + seq_len].to(device=x.device, dtype=x.dtype)
+        elif isinstance(rope, ARFSRoPEEmbedding):
+            gamma: torch.Tensor = rope.gamma  # type: ignore[assignment]
+            domain_tensor = torch.tensor(domain_id, device=gamma.device, dtype=torch.long)
+            domain_embed = rope.domain_embed(domain_tensor)
+            scaling = torch.exp(gamma * domain_embed)
+            cos_base: torch.Tensor = rope.freqs_cos_base  # type: ignore[assignment]
+            sin_base: torch.Tensor = rope.freqs_sin_base  # type: ignore[assignment]
+            freqs_cos = (cos_base[position_offset : position_offset + seq_len] * scaling.unsqueeze(0)).to(
                 device=x.device,
                 dtype=x.dtype,
             )
-            freqs_sin = (self.rope.freqs_sin_base[position_offset : position_offset + seq_len] * scaling.unsqueeze(0)).to(
+            freqs_sin = (sin_base[position_offset : position_offset + seq_len] * scaling.unsqueeze(0)).to(
                 device=x.device,
                 dtype=x.dtype,
             )
@@ -362,9 +373,9 @@ class MultiHeadAttention(nn.Module):
 
         if cache is not None:
             cache.append(key, value)
-            key, value = cache.get()
-        else:
-            key, value = key, value
+            cached_key, cached_value = cache.get()
+            assert cached_key is not None and cached_value is not None
+            key, value = cached_key, cached_value
 
         output = scaled_dot_product_attention(
             query=query,
@@ -452,9 +463,13 @@ class MLAAttention(nn.Module):
     def _apply_rope(self, x: torch.Tensor, position_offset: int = 0) -> torch.Tensor:
         if self.rope is None or self.d_rope == 0:
             return x
+        rope = self.rope
+        assert isinstance(rope, RoPEEmbedding)
+        cos_buf: torch.Tensor = rope.freqs_cos  # type: ignore[assignment]
+        sin_buf: torch.Tensor = rope.freqs_sin  # type: ignore[assignment]
         seq_len = x.size(1)
-        freqs_cos = self.rope.freqs_cos[position_offset : position_offset + seq_len].to(device=x.device, dtype=x.dtype)
-        freqs_sin = self.rope.freqs_sin[position_offset : position_offset + seq_len].to(device=x.device, dtype=x.dtype)
+        freqs_cos = cos_buf[position_offset : position_offset + seq_len].to(device=x.device, dtype=x.dtype)
+        freqs_sin = sin_buf[position_offset : position_offset + seq_len].to(device=x.device, dtype=x.dtype)
         return apply_rope(x, freqs_cos, freqs_sin)
 
     def forward(
@@ -621,6 +636,7 @@ class MoELayer(nn.Module):
         self.aux_loss_weight = aux_loss_weight
         self.entropy_weight = entropy_weight
 
+        self.router: Union[HierarchicalRouter, TopKRouter]
         if hierarchical:
             self.router = HierarchicalRouter(d_model=d_model, n_experts=n_experts, top_k=n_active, n_groups=n_groups)
         else:
@@ -697,11 +713,12 @@ class DecoderBlock(nn.Module):
         moe_num_groups: int = 8,
     ):
         super().__init__()
-        hidden_dim = int(round(d_model * mlp_ratio))
+        hidden_dim = round(d_model * mlp_ratio)
         if hidden_dim <= 0:
             raise ValueError(f"mlp_ratio produced invalid hidden_dim={hidden_dim}")
 
         self.norm1 = RMSNorm(d_model, eps=norm_eps)
+        self.attn: Union[MLAAttention, MultiHeadAttention]
         if attention_type == "mla":
             self.attn = MLAAttention(
                 d_model=d_model,
@@ -729,6 +746,7 @@ class DecoderBlock(nn.Module):
             )
         self.norm2 = RMSNorm(d_model, eps=norm_eps)
         self.ffn_type = ffn_type
+        self.mlp: Union[SwiGLUFFN, MoELayer, nn.Sequential]
         if ffn_type == "swiglu":
             self.mlp = SwiGLUFFN(d_model=d_model, d_ffn=hidden_dim, bias=bias, dropout=dropout)
         elif ffn_type == "moe":
@@ -829,16 +847,11 @@ class TransformerLM(nn.Module):
         self,
         input_ids: torch.Tensor,
         attn_mask: Optional[torch.Tensor] = None,
-        caches: Optional[Sequence[Union[KVCache, LatentKVCache]]] = None,
+        caches: Optional[list[Union[KVCache, LatentKVCache, None]]] = None,
         domain_id: int = 0,
         use_cache: bool = False,
         return_aux: bool = False,
-    ) -> Union[
-        torch.Tensor,
-        tuple[torch.Tensor, Sequence[Union[KVCache, LatentKVCache]]],
-        tuple[torch.Tensor, torch.Tensor],
-        tuple[torch.Tensor, Sequence[Union[KVCache, LatentKVCache]], torch.Tensor],
-    ]:
+    ) -> Any:
         x = self.token_embedding(input_ids)
         if self.positional_embedding is not None:
             cache_offset = 0
@@ -919,10 +932,43 @@ class LLM(nn.Module):
         if hasattr(self.model.token_embedding, "embed") and hasattr(self.model.token_embedding.embed, "weight"):
             token_embed_weight = self.model.token_embedding.embed.weight
         if tie_weights and token_embed_weight is not None and self.model.lm_head.weight.shape == token_embed_weight.shape:
-            self.model.lm_head.weight = token_embed_weight
+            self.model.lm_head.weight = token_embed_weight  # type: ignore[assignment]
 
     def forward(self, *args, **kwargs):
         return self.model(*args, **kwargs)
+
+    def save_pretrained(self, save_directory: str):
+        """Save the model state and config to a directory."""
+        os.makedirs(save_directory, exist_ok=True)
+        # Save state dict
+        torch.save(self.state_dict(), os.path.join(save_directory, "pytorch_model.bin"))
+        # Save config
+        config_dict = {
+            "vocab_size": self.model.config.vocab_size,
+            "d_model": self.model.config.d_model,
+            "n_layers": self.model.config.n_layers,
+            "n_heads": self.model.config.n_heads,
+            "max_seq_len": self.model.config.max_seq_length,
+            "n_experts": self.model.config.moe_num_experts,
+            "d_c": self.model.config.mla_d_c,
+            "d_rope": self.model.config.mla_d_rope,
+            "embedding_mode": self.model.config.embedding_mode,
+        }
+        with open(os.path.join(save_directory, "config.json"), "w") as f:
+            json.dump(config_dict, f, indent=2)
+        print(f"Model saved to {save_directory}")
+
+    @classmethod
+    def from_pretrained(cls, load_directory: str):
+        """Load the model from a directory."""
+        config_path = os.path.join(load_directory, "config.json")
+        with open(config_path, "r") as f:
+            config_dict = json.load(f)
+        
+        model = cls(**config_dict)
+        state_dict_path = os.path.join(load_directory, "pytorch_model.bin")
+        model.load_state_dict(torch.load(state_dict_path, map_location="cpu"))
+        return model
 
 
 __all__ = [

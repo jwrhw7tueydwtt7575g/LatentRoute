@@ -32,7 +32,24 @@ From project root:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install torch pytest numpy "ray[default]" "ray[tune]"
+python -m pip install -r requirements.txt
+```
+
+---
+
+## 2) Wikipedia Training Pipeline
+
+New scripts have been added to support full-scale training:
+
+- `scripts/prepare_wiki.py`: Extracts Wikipedia articles into JSONL format (streaming).
+- `scripts/train_on_wiki.py`: Trains the LatentRoute model on Wikipedia with all innovations enabled.
+- `src/model/hf_utils.py`: Uploads your trained model to the Hugging Face Hub.
+
+Example training:
+
+```bash
+source .venv/bin/activate
+python scripts/train_on_wiki.py --total_steps 5000
 ```
 
 ---

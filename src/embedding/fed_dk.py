@@ -70,8 +70,9 @@ class FEDDkEmbedding(nn.Module):
     def _compute_dim_mask(self) -> torch.Tensor:
         """Compute [vocab_size, k_max] mask for per-token k_i masking."""
         mask = torch.zeros(self.vocab_size, self.k_max, dtype=torch.bool)
+        k_buf: torch.Tensor = self.k_per_token  # type: ignore[assignment]
         for token_id in range(self.vocab_size):
-            k_i = self.k_per_token[token_id].item()
+            k_i = k_buf[token_id].item()
             mask[token_id, :k_i] = True
         return mask
 
@@ -94,7 +95,8 @@ class FEDDkEmbedding(nn.Module):
         # Mask: [batch, seq, k_max] — select only valid dims per token
         batch_shape = token_ids.shape
         token_ids_flat = token_ids.view(-1)
-        mask_selected = self.dim_mask[token_ids_flat]  # [batch*seq, k_max]
+        dim_mask_buf: torch.Tensor = self.dim_mask  # type: ignore[assignment]
+        mask_selected = dim_mask_buf[token_ids_flat]  # [batch*seq, k_max]
         mask_selected = mask_selected.view(*batch_shape, self.k_max)
 
         # Zero out inactive dimensions
@@ -112,7 +114,8 @@ class FEDDkEmbedding(nn.Module):
             E: shape [vocab_size, d_model]
         """
         a_weight = self.A.weight  # [vocab_size, k_max]
-        mask_all = self.dim_mask.float()  # [vocab_size, k_max]
+        mask_buf: torch.Tensor = self.dim_mask  # type: ignore[assignment]
+        mask_all = mask_buf.float()  # [vocab_size, k_max]
         a_masked = a_weight * mask_all
 
         b_weight = self.B.weight  # [d_model, k_max]

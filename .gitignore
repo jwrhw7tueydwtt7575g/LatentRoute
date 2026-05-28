@@ -44,3 +44,50 @@ env/
 
 # Logs
 *.log
+
+# Large model checkpoints (push to Hugging Face instead)
+*.pt
+checkpoint_*.pt
+final_model.pt
+*.pth
+model_weights/
+
+# Training artifacts
+ray_results/
+wandb/
+lightning_logs/
+
+# Data files
+wiki_corpus.jsonl
+*.jsonl
+data/
+datasets/
+
+# Cache directories
+.cache/
+cache/
+/cache/
+*_cache/
+huggingface/
+
+# Docker volumes
+volumes/
+
+# Large package caches
+.venv/lib/python3.*/site-packages/
+node_modules/
+
+# GPU/CUDA temporary files
+*.nvvp
+*.prof
+
+# OS temporary files
+*~
+*.swp
+*.swo
+.DS_Store
+
+# Git LFS (if using for large files)
+*.psd
+*.zip
+*.tar.gz

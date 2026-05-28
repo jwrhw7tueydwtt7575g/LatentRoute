@@ -1,0 +1,9 @@
+[project]
+name = "latentroute"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.pyrefly]
+search_path = ["."]
+python_version = "3.12"
+site_package_path_from_interpreter = ".venv/bin/python"
